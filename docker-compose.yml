@@ -11,26 +11,23 @@ services:
       - ICECAST_RELAY_PASSWORD=hackme
 
   mopidy:
-    build: ./mopidy
-    image: jaren-nul-mopidy:custom
+    image: wesleydv938/jaren-nul-mopidy:latest
     container_name: jaren-nul-mopidy
     restart: unless-stopped
     ports:
       - "6680:6680"   # Web interface
       - "6600:6600"   # MPD protocol
     volumes:
-      - ./mopidy:/config
       - mopidy-local:/var/lib/mopidy/local
-    env_file: .env
     environment:
       - TZ=Europe/Brussels
-    entrypoint: ["/config/init.sh"]
-    command: ["/opt/venv/bin/mopidy"]
+      - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
+      - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
     depends_on:
       - icecast
 
   sync-service:
-    build: ./sync
+    image: wesleydv938/jaren-nul-sync:latest
     container_name: jaren-nul-sync
     restart: unless-stopped
     environment:
