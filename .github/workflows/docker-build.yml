@@ -32,8 +32,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: wesleydv938/jaren-nul-mopidy:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          no-cache: true
 
       - name: Build and push Sync image
         uses: docker/build-push-action@v6
@@ -42,5 +41,4 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: wesleydv938/jaren-nul-sync:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          no-cache: true
