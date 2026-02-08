@@ -69,16 +69,6 @@ docker-compose restart
 docker-compose down
 ```
 
-## Open Source
-
-When open sourcing this project:
-
-1. **DO NOT** commit `.env` (it's in `.gitignore`)
-2. **DO** commit `.env.example` with placeholder values
-3. Users copy `.env.example` to `.env` and add their credentials
-
-Standard Docker Compose / Dockge workflow!
-
 ## Architecture
 
 - **Icecast** - Streaming server
