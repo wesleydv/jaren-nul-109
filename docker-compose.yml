@@ -1,0 +1,43 @@
+services:
+  icecast:
+    image: moul/icecast
+    container_name: jaren-nul-icecast
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - ICECAST_SOURCE_PASSWORD=hackme
+      - ICECAST_ADMIN_PASSWORD=hackme
+      - ICECAST_RELAY_PASSWORD=hackme
+
+  mopidy:
+    build: ./mopidy
+    image: jaren-nul-mopidy:custom
+    container_name: jaren-nul-mopidy
+    restart: unless-stopped
+    ports:
+      - "6680:6680"   # Web interface
+      - "6600:6600"   # MPD protocol
+    volumes:
+      - ./mopidy:/config
+      - mopidy-local:/var/lib/mopidy/local
+    env_file: .env
+    environment:
+      - TZ=Europe/Brussels
+    entrypoint: ["/config/init.sh"]
+    command: ["/opt/venv/bin/mopidy"]
+    depends_on:
+      - icecast
+
+  sync-service:
+    build: ./sync
+    container_name: jaren-nul-sync
+    restart: unless-stopped
+    environment:
+      - MOPIDY_HOST=mopidy
+      - MOPIDY_PORT=6680
+    depends_on:
+      - mopidy
+
+volumes:
+  mopidy-local:
