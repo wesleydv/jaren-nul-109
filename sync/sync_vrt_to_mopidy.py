@@ -342,7 +342,7 @@ def search_and_add_song(mopidy: MopidyClient, song: Dict) -> bool:
             uri = track.get('uri')
             if uri:
                 mopidy.add_track(uri)
-                artist_names = ', '.join(a['name'] for a in track.get('artists', []])
+                artist_names = ', '.join(a['name'] for a in track.get('artists', []))
                 print(f"  ✓ Added (title-only): {song['artist']} - {song['title']}")
                 print(f"    Matched to: {artist_names} - {track.get('name')}")
                 return True
