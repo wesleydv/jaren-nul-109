@@ -1,5 +1,5 @@
 #!/bin/bash
-# Health check for Mopidy: verify it's responsive and playing
+# Health check for Mopidy: verify it's responsive
 
 # Check if Mopidy HTTP is responding
 if ! timeout 2 bash -c "echo > /dev/tcp/localhost/6680" 2>/dev/null; then
