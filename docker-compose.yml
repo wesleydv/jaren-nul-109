@@ -46,6 +46,7 @@ services:
     environment:
       - MOPIDY_HOST=mopidy
       - MOPIDY_PORT=6680
+      - ICECAST_HOST=icecast
     depends_on:
       mopidy:
         condition: service_healthy

@@ -93,6 +93,10 @@ class MopidyClient:
         """Start playback"""
         self._call('core.playback.play')
 
+    def stop(self):
+        """Stop playback"""
+        self._call('core.playback.stop')
+
     def get_state(self):
         """Get current playback state"""
         return self._call('core.playback.get_state')
@@ -116,6 +120,29 @@ class MopidyClient:
     def remove_tracks(self, criteria):
         """Remove tracks from tracklist"""
         return self._call('core.tracklist.remove', criteria=criteria)
+
+
+def check_icecast_stream(icecast_host: str, mount: str = '/stream') -> bool:
+    """Check if Icecast has an active source on the specified mount point"""
+    try:
+        response = requests.get(f"http://{icecast_host}:8000/status-json.xsl", timeout=5)
+        response.raise_for_status()
+        data = response.json()
+
+        # Check if there's an active source
+        icestats = data.get('icestats', {})
+        source = icestats.get('source')
+
+        # Handle single source (dict) or multiple sources (list)
+        if isinstance(source, dict):
+            return source.get('mount') == mount
+        elif isinstance(source, list):
+            return any(s.get('mount') == mount for s in source)
+
+        return False
+    except Exception as e:
+        print(f"⚠️  Error checking Icecast status: {e}")
+        return False
 
 
 def fetch_vrt_playlist() -> List[Dict]:
@@ -462,6 +489,18 @@ def sync_to_mopidy(mopidy: MopidyClient, seen_songs: Set[str], is_initial: bool 
         print("⚠️  Playback is paused/stopped, auto-resuming...")
         mopidy.play()
         print("▶️  Playback resumed")
+
+    # Check stream health: if Mopidy is playing but Icecast has no stream, restart playback
+    elif state == 'playing' and tracklist_length > 0:
+        # Determine Icecast host (use environment variable or default to mopidy host)
+        icecast_host = os.getenv('ICECAST_HOST', MOPIDY_HOST)
+        if not check_icecast_stream(icecast_host):
+            print("⚠️  Stream is broken (Mopidy playing but Icecast has no stream)")
+            print("🔧 Restarting playback to reconnect GStreamer pipeline...")
+            mopidy.stop()
+            time.sleep(2)  # Give GStreamer time to clean up
+            mopidy.play()
+            print("✅ Playback restarted")
 
     print("✓ Sync complete\n")
 
