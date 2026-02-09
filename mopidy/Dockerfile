@@ -10,9 +10,10 @@ RUN /opt/venv/bin/pip install --no-cache-dir Mopidy-Autoplay
 COPY mopidy.conf.template /config/mopidy.conf.template
 COPY init.sh /config/init.sh
 COPY entrypoint.sh /config/entrypoint.sh
+COPY healthcheck.sh /config/healthcheck.sh
 
 # Make scripts executable
-RUN chmod +x /config/init.sh /config/entrypoint.sh
+RUN chmod +x /config/init.sh /config/entrypoint.sh /config/healthcheck.sh
 
 # Set the entrypoint
 ENTRYPOINT ["/config/init.sh"]

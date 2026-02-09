@@ -4,7 +4,7 @@ config_dir = /var/lib/mopidy/.config
 data_dir = /var/lib/mopidy/.local/share/mopidy
 
 [audio]
-output = audioresample ! audioconvert ! lamemp3enc ! shout2send async=false mount=/stream ip=icecast port=8000 password=hackme
+output = audioresample ! audioconvert ! lamemp3enc ! queue max-size-buffers=0 max-size-time=10000000000 max-size-bytes=0 ! shout2send async=true mount=/stream ip=icecast port=8000 password=hackme
 
 [http]
 enabled = true

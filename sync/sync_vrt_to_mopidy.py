@@ -224,8 +224,10 @@ def find_best_match(vrt_artist: str, vrt_title: str, search_results: List[Dict])
     Scoring:
     - Artist similarity: 70% weight
     - Title similarity: 30% weight
-    - Minimum threshold: 0.7 (70%)
+    - Minimum threshold: 0.6 (60%)
     """
+    import re
+
     ARTIST_WEIGHT = 0.7
     TITLE_WEIGHT = 0.3
     THRESHOLD = 0.7
@@ -234,19 +236,46 @@ def find_best_match(vrt_artist: str, vrt_title: str, search_results: List[Dict])
     best_score = 0.0
     best_track = None
 
+    # Split VRT artist into individual names (handles &, and, feat., ,)
+    vrt_artist_parts = re.split(r'\s+&\s+|\s+and\s+|\s*,\s*|\s+feat\.?\s+|\s+ft\.?\s+', vrt_artist.lower())
+    vrt_artist_parts = [p.strip() for p in vrt_artist_parts if p.strip()]
+
     for track in search_results[:MAX_RESULTS]:
         # Get artist names from track
         track_artists = track.get('artists', [])
         if not track_artists:
             continue
 
-        # Calculate max artist similarity (handles multiple artists)
-        max_artist_sim = 0.0
-        for artist_obj in track_artists:
-            artist_name = artist_obj.get('name', '')
-            if artist_name:
-                sim = calculate_artist_similarity(vrt_artist, artist_name)
-                max_artist_sim = max(max_artist_sim, sim)
+        # For multi-artist tracks, join all Spotify artists and compare against full VRT artist
+        all_spotify_artists = ' '.join([a.get('name', '') for a in track_artists])
+        full_match_sim = calculate_artist_similarity(vrt_artist, all_spotify_artists)
+
+        # Also try matching individual VRT artist parts against Spotify artists
+        if len(vrt_artist_parts) > 1:
+            # Calculate what percentage of VRT artists appear in Spotify artists
+            matches = 0
+            for vrt_part in vrt_artist_parts:
+                for artist_obj in track_artists:
+                    artist_name = artist_obj.get('name', '')
+                    if artist_name:
+                        sim = calculate_artist_similarity(vrt_part, artist_name)
+                        if sim >= 0.7:  # Individual artist needs 70% match
+                            matches += 1
+                            break
+
+            # Score based on percentage of artists matched
+            multi_artist_sim = matches / len(vrt_artist_parts) if vrt_artist_parts else 0
+
+            # Use the better of the two approaches
+            max_artist_sim = max(full_match_sim, multi_artist_sim)
+        else:
+            # Single artist: just use direct comparison
+            max_artist_sim = 0.0
+            for artist_obj in track_artists:
+                artist_name = artist_obj.get('name', '')
+                if artist_name:
+                    sim = calculate_artist_similarity(vrt_artist, artist_name)
+                    max_artist_sim = max(max_artist_sim, sim)
 
         # Calculate title similarity
         track_title = track.get('name', '')
@@ -268,6 +297,7 @@ def find_best_match(vrt_artist: str, vrt_title: str, search_results: List[Dict])
 
 def search_and_add_song(mopidy: MopidyClient, song: Dict) -> bool:
     """Search for a song on Spotify and add it to the playlist"""
+    import re
 
     # Try primary search: artist + title
     query = f"{song['artist']} {song['title']}"
@@ -286,8 +316,24 @@ def search_and_add_song(mopidy: MopidyClient, song: Dict) -> bool:
                 print(f"    Matched to: {artist_names} - {track.get('name')}")
                 return True
 
-    # Fallback: try title-only search
-    print(f"  ⚠ No good match for artist+title, trying title-only search...")
+    # Fallback 1: try with first artist only (for multi-artist tracks)
+    first_artist = re.split(r'\s+&\s+|\s+and\s+|\s*,\s*|\s+feat\.?\s+', song['artist'])[0].strip()
+    if first_artist != song['artist']:
+        query = f"{first_artist} {song['title']}"
+        results = mopidy.search(query)
+
+        if results:
+            track = find_best_match(song['artist'], song['title'], results)
+            if track:
+                uri = track.get('uri')
+                if uri:
+                    mopidy.add_track(uri)
+                    artist_names = ', '.join(a['name'] for a in track.get('artists', []))
+                    print(f"  ✓ Added (first artist): {song['artist']} - {song['title']}")
+                    print(f"    Matched to: {artist_names} - {track.get('name')}")
+                    return True
+
+    # Fallback 2: try title-only search
     results = mopidy.search(song['title'])
 
     if results:
@@ -296,8 +342,8 @@ def search_and_add_song(mopidy: MopidyClient, song: Dict) -> bool:
             uri = track.get('uri')
             if uri:
                 mopidy.add_track(uri)
-                artist_names = ', '.join(a['name'] for a in track.get('artists', []))
-                print(f"  ✓ Added (fallback): {song['artist']} - {song['title']}")
+                artist_names = ', '.join(a['name'] for a in track.get('artists', []])
+                print(f"  ✓ Added (title-only): {song['artist']} - {song['title']}")
                 print(f"    Matched to: {artist_names} - {track.get('name')}")
                 return True
 
