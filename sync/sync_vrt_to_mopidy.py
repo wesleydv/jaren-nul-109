@@ -495,7 +495,8 @@ def sync_to_mopidy(mopidy: MopidyClient, seen_songs: Set[str], is_initial: bool 
         print("▶️  Playback resumed")
 
     # Check stream health: if Mopidy is playing but Icecast has no stream, skip the broken track
-    elif state == 'playing' and tracklist_length > 0:
+    # Skip this check on initial sync - GStreamer needs time to connect to Icecast after first play()
+    elif state == 'playing' and tracklist_length > 0 and not is_initial:
         icecast_host = os.getenv('ICECAST_HOST', 'icecast')
         if not check_icecast_stream(icecast_host):
             broken_track = mopidy.get_current_track()
