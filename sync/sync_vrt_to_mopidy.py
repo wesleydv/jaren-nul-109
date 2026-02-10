@@ -496,8 +496,7 @@ def sync_to_mopidy(mopidy: MopidyClient, seen_songs: Set[str], is_initial: bool 
 
     # Check stream health: if Mopidy is playing but Icecast has no stream, skip the broken track
     elif state == 'playing' and tracklist_length > 0:
-        # Determine Icecast host (use environment variable or default to mopidy host)
-        icecast_host = os.getenv('ICECAST_HOST', MOPIDY_HOST)
+        icecast_host = os.getenv('ICECAST_HOST', 'icecast')
         if not check_icecast_stream(icecast_host):
             broken_track = mopidy.get_current_track()
             broken_name = broken_track.get('name', 'Unknown') if broken_track else 'Unknown'
