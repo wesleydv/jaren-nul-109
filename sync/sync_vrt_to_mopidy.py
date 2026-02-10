@@ -97,6 +97,10 @@ class MopidyClient:
         """Stop playback"""
         self._call('core.playback.stop')
 
+    def next_track(self):
+        """Skip to next track"""
+        self._call('core.playback.next')
+
     def get_state(self):
         """Get current playback state"""
         return self._call('core.playback.get_state')
@@ -490,17 +494,29 @@ def sync_to_mopidy(mopidy: MopidyClient, seen_songs: Set[str], is_initial: bool 
         mopidy.play()
         print("▶️  Playback resumed")
 
-    # Check stream health: if Mopidy is playing but Icecast has no stream, restart playback
+    # Check stream health: if Mopidy is playing but Icecast has no stream, skip the broken track
     elif state == 'playing' and tracklist_length > 0:
         # Determine Icecast host (use environment variable or default to mopidy host)
         icecast_host = os.getenv('ICECAST_HOST', MOPIDY_HOST)
         if not check_icecast_stream(icecast_host):
-            print("⚠️  Stream is broken (Mopidy playing but Icecast has no stream)")
-            print("🔧 Restarting playback to reconnect GStreamer pipeline...")
+            broken_track = mopidy.get_current_track()
+            broken_name = broken_track.get('name', 'Unknown') if broken_track else 'Unknown'
+            broken_artists = broken_track.get('artists', []) if broken_track else []
+            broken_artist = broken_artists[0].get('name', 'Unknown') if broken_artists else 'Unknown'
+            print(f"⚠️  Stream is broken - skipping unavailable track: {broken_artist} - {broken_name}")
+
             mopidy.stop()
-            time.sleep(2)  # Give GStreamer time to clean up
+            time.sleep(1)
+            mopidy.next_track()  # Skip the track that broke the pipeline
+            time.sleep(1)
             mopidy.play()
-            print("✅ Playback restarted")
+
+            # Verify stream recovered
+            time.sleep(4)
+            if check_icecast_stream(icecast_host):
+                print("✅ Stream recovered")
+            else:
+                print("⚠️  Stream still broken after skip, will retry next cycle")
 
     print("✓ Sync complete\n")
 
