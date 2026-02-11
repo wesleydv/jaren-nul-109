@@ -138,10 +138,11 @@ def check_icecast_stream(icecast_host: str, mount: str = '/stream') -> bool:
         source = icestats.get('source')
 
         # Handle single source (dict) or multiple sources (list)
+        # Icecast reports mount via listenurl (e.g. http://host:8000/stream)
         if isinstance(source, dict):
-            return source.get('mount') == mount
+            return source.get('listenurl', '').endswith(mount)
         elif isinstance(source, list):
-            return any(s.get('mount') == mount for s in source)
+            return any(s.get('listenurl', '').endswith(mount) for s in source)
 
         return False
     except Exception as e:
