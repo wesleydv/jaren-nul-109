@@ -239,12 +239,20 @@ def calculate_artist_similarity(artist1: str, artist2: str) -> float:
     """
     Calculate similarity between two artist names.
     Returns 0.0 (no match) to 1.0 (exact match).
+
+    Includes a containment bonus: if one name is fully contained in the other
+    (e.g. VRT says "Spearhead", Spotify says "Michael Franti & Spearhead"),
+    treat it as a strong match (0.85).
     """
     norm1 = normalize_artist_name(artist1)
     norm2 = normalize_artist_name(artist2)
 
     if not norm1 or not norm2:
         return 0.0
+
+    # Containment bonus: one name is a substring of the other
+    if norm1 in norm2 or norm2 in norm1:
+        return 0.85
 
     return SequenceMatcher(None, norm1, norm2).ratio()
 
@@ -327,7 +335,7 @@ def find_best_match(vrt_artist: str, vrt_title: str, search_results: List[Dict])
     return None
 
 
-def search_and_add_song(mopidy: MopidyClient, song: Dict) -> bool:
+def search_and_add_song(mopidy: MopidyClient, song: Dict, not_found_songs: Set[str]) -> bool:
     """Search for a song on Spotify and add it to the playlist"""
     import re
 
@@ -379,9 +387,11 @@ def search_and_add_song(mopidy: MopidyClient, song: Dict) -> bool:
                 print(f"    Matched to: {artist_names} - {track.get('name')}")
                 return True
 
-    # No good match found
+    # No good match found - mark as permanently not found to stop retrying
+    song_id = song_key(song)
+    not_found_songs.add(song_id)
     print(f"  ✗ Not found: {song['artist']} - {song['title']}")
-    print(f"    (No match above 70% confidence threshold)")
+    print(f"    (No match above 70% confidence threshold - will not retry)")
     return False
 
 
@@ -430,7 +440,7 @@ def prune_old_tracks(mopidy: MopidyClient, max_playlist_length: int = 50):
         return False
 
 
-def sync_to_mopidy(mopidy: MopidyClient, seen_songs: Set[str], is_initial: bool = False, prune: bool = False):
+def sync_to_mopidy(mopidy: MopidyClient, seen_songs: Set[str], not_found_songs: Set[str], is_initial: bool = False, prune: bool = False):
     """Smart sync logic - only add NEW songs"""
     if prune:
         print("\n🧹 Pruning old tracks...")
@@ -452,7 +462,7 @@ def sync_to_mopidy(mopidy: MopidyClient, seen_songs: Set[str], is_initial: bool 
                 continue
 
             song_id = song_key(song)
-            if search_and_add_song(mopidy, song):
+            if search_and_add_song(mopidy, song, not_found_songs):
                 seen_songs.add(song_id)
 
         print("\nStarting playback...")
@@ -468,9 +478,9 @@ def sync_to_mopidy(mopidy: MopidyClient, seen_songs: Set[str], is_initial: bool 
 
             song_id = song_key(song)
 
-            if song_id not in seen_songs:
+            if song_id not in seen_songs and song_id not in not_found_songs:
                 print(f"\n  🆕 New song detected!")
-                if search_and_add_song(mopidy, song):
+                if search_and_add_song(mopidy, song, not_found_songs):
                     seen_songs.add(song_id)
                     new_songs_found = True
 
@@ -550,10 +560,11 @@ def main():
         return
 
     seen_songs: Set[str] = set()
+    not_found_songs: Set[str] = set()
 
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Initial sync...")
     try:
-        sync_to_mopidy(mopidy, seen_songs, is_initial=True, prune=False)
+        sync_to_mopidy(mopidy, seen_songs, not_found_songs, is_initial=True, prune=False)
     except Exception as e:
         print(f"Error in initial sync: {e}")
         import traceback
@@ -576,7 +587,7 @@ def main():
             else:
                 print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Checking for new songs...")
 
-            sync_to_mopidy(mopidy, seen_songs, is_initial=False, prune=should_prune)
+            sync_to_mopidy(mopidy, seen_songs, not_found_songs, is_initial=False, prune=should_prune)
 
         except KeyboardInterrupt:
             print("\nStopping...")
