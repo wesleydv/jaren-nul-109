@@ -12,6 +12,7 @@ import os
 from datetime import datetime
 from difflib import SequenceMatcher
 from typing import List, Dict, Set, Optional
+import sheets_logger as sheets_logger_module
 
 # Configuration
 MOPIDY_HOST = os.getenv('MOPIDY_HOST', 'localhost')
@@ -335,7 +336,7 @@ def find_best_match(vrt_artist: str, vrt_title: str, search_results: List[Dict])
     return None
 
 
-def search_and_add_song(mopidy: MopidyClient, song: Dict, not_found_songs: Set[str]) -> bool:
+def search_and_add_song(mopidy: MopidyClient, song: Dict, not_found_songs: Set[str], logger=None) -> bool:
     """Search for a song on Spotify and add it to the playlist"""
     import re
 
@@ -350,10 +351,11 @@ def search_and_add_song(mopidy: MopidyClient, song: Dict, not_found_songs: Set[s
             uri = track.get('uri')
             if uri:
                 mopidy.add_track(uri)
-                # Enhanced logging
                 artist_names = ', '.join(a['name'] for a in track.get('artists', []))
                 print(f"  ✓ Added: {song['artist']} - {song['title']}")
                 print(f"    Matched to: {artist_names} - {track.get('name')}")
+                if logger:
+                    logger.log_song(artist_names, track.get('name', ''), uri)
                 return True
 
     # Fallback 1: try with first artist only (for multi-artist tracks)
@@ -371,6 +373,8 @@ def search_and_add_song(mopidy: MopidyClient, song: Dict, not_found_songs: Set[s
                     artist_names = ', '.join(a['name'] for a in track.get('artists', []))
                     print(f"  ✓ Added (first artist): {song['artist']} - {song['title']}")
                     print(f"    Matched to: {artist_names} - {track.get('name')}")
+                    if logger:
+                        logger.log_song(artist_names, track.get('name', ''), uri)
                     return True
 
     # Fallback 2: try title-only search
@@ -385,6 +389,8 @@ def search_and_add_song(mopidy: MopidyClient, song: Dict, not_found_songs: Set[s
                 artist_names = ', '.join(a['name'] for a in track.get('artists', []))
                 print(f"  ✓ Added (title-only): {song['artist']} - {song['title']}")
                 print(f"    Matched to: {artist_names} - {track.get('name')}")
+                if logger:
+                    logger.log_song(artist_names, track.get('name', ''), uri)
                 return True
 
     # No good match found - mark as permanently not found to stop retrying
@@ -440,7 +446,7 @@ def prune_old_tracks(mopidy: MopidyClient, max_playlist_length: int = 50):
         return False
 
 
-def sync_to_mopidy(mopidy: MopidyClient, seen_songs: Set[str], not_found_songs: Set[str], is_initial: bool = False, prune: bool = False):
+def sync_to_mopidy(mopidy: MopidyClient, seen_songs: Set[str], not_found_songs: Set[str], logger=None, is_initial: bool = False, prune: bool = False):
     """Smart sync logic - only add NEW songs"""
     if prune:
         print("\n🧹 Pruning old tracks...")
@@ -462,7 +468,7 @@ def sync_to_mopidy(mopidy: MopidyClient, seen_songs: Set[str], not_found_songs: 
                 continue
 
             song_id = song_key(song)
-            if search_and_add_song(mopidy, song, not_found_songs):
+            if search_and_add_song(mopidy, song, not_found_songs, logger):
                 seen_songs.add(song_id)
 
         print("\nStarting playback...")
@@ -480,7 +486,7 @@ def sync_to_mopidy(mopidy: MopidyClient, seen_songs: Set[str], not_found_songs: 
 
             if song_id not in seen_songs and song_id not in not_found_songs:
                 print(f"\n  🆕 New song detected!")
-                if search_and_add_song(mopidy, song, not_found_songs):
+                if search_and_add_song(mopidy, song, not_found_songs, logger):
                     seen_songs.add(song_id)
                     new_songs_found = True
 
@@ -561,10 +567,11 @@ def main():
 
     seen_songs: Set[str] = set()
     not_found_songs: Set[str] = set()
+    logger = sheets_logger_module.create_logger()
 
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Initial sync...")
     try:
-        sync_to_mopidy(mopidy, seen_songs, not_found_songs, is_initial=True, prune=False)
+        sync_to_mopidy(mopidy, seen_songs, not_found_songs, logger, is_initial=True, prune=False)
     except Exception as e:
         print(f"Error in initial sync: {e}")
         import traceback
@@ -587,7 +594,7 @@ def main():
             else:
                 print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Checking for new songs...")
 
-            sync_to_mopidy(mopidy, seen_songs, not_found_songs, is_initial=False, prune=should_prune)
+            sync_to_mopidy(mopidy, seen_songs, not_found_songs, logger, is_initial=False, prune=should_prune)
 
         except KeyboardInterrupt:
             print("\nStopping...")

@@ -46,6 +46,10 @@ services:
     environment:
       - MOPIDY_HOST=mopidy
       - MOPIDY_PORT=6680
+      - GOOGLE_SHEETS_ID=${GOOGLE_SHEETS_ID}
+      - GOOGLE_SHEETS_CREDENTIALS=/credentials/service-account.json
+    volumes:
+      - ${GOOGLE_SHEETS_CREDENTIALS_PATH:-/dev/null}:/credentials/service-account.json:ro
     depends_on:
       mopidy:
         condition: service_healthy
