@@ -46,6 +46,8 @@ services:
     environment:
       - MOPIDY_HOST=mopidy
       - MOPIDY_PORT=6680
+      - ICECAST_HOST=icecast
+      - ICECAST_ADMIN_PASSWORD=hackme
       - GOOGLE_SHEETS_ID=${GOOGLE_SHEETS_ID}
       - GOOGLE_SHEETS_CREDENTIALS=/credentials/service-account.json
     volumes:

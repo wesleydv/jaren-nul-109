@@ -17,6 +17,8 @@ import sheets_logger as sheets_logger_module
 # Configuration
 MOPIDY_HOST = os.getenv('MOPIDY_HOST', 'localhost')
 MOPIDY_PORT = int(os.getenv('MOPIDY_PORT', '6680'))
+ICECAST_HOST = os.getenv('ICECAST_HOST', 'icecast')
+ICECAST_ADMIN_PASSWORD = os.getenv('ICECAST_ADMIN_PASSWORD', 'hackme')
 CHECK_INTERVAL = 120  # Check every 2 minutes
 PRUNE_INTERVAL = 86400  # Prune every 24 hours
 STREAM_NAME = 'De Jaren Nul - 109'
@@ -125,6 +127,27 @@ class MopidyClient:
     def remove_tracks(self, criteria):
         """Remove tracks from tracklist"""
         return self._call('core.tracklist.remove', criteria=criteria)
+
+
+def push_icecast_metadata(artist: str, title: str, mount: str = '/stream') -> bool:
+    """Push current track metadata to Icecast via admin API"""
+    song = f"{artist} - {title}"
+    try:
+        response = requests.get(
+            f"http://{ICECAST_HOST}:8000/admin/metadata",
+            params={"mount": mount, "mode": "updinfo", "song": song},
+            auth=("admin", ICECAST_ADMIN_PASSWORD),
+            timeout=5,
+        )
+        if response.status_code == 200:
+            print(f"📡 ICY metadata updated: {song}")
+            return True
+        else:
+            print(f"⚠️  Icecast metadata push failed: HTTP {response.status_code}: {response.text.strip()}")
+            return False
+    except Exception as e:
+        print(f"⚠️  Icecast metadata push error: {e}")
+        return False
 
 
 def check_icecast_stream(icecast_host: str, mount: str = '/stream') -> bool:
@@ -446,7 +469,7 @@ def prune_old_tracks(mopidy: MopidyClient, max_playlist_length: int = 50):
         return False
 
 
-def sync_to_mopidy(mopidy: MopidyClient, seen_songs: Set[str], not_found_songs: Set[str], logger=None, is_initial: bool = False, prune: bool = False):
+def sync_to_mopidy(mopidy: MopidyClient, seen_songs: Set[str], not_found_songs: Set[str], logger=None, is_initial: bool = False, prune: bool = False, last_icy_song: Optional[str] = None) -> Optional[str]:
     """Smart sync logic - only add NEW songs"""
     if prune:
         print("\n🧹 Pruning old tracks...")
@@ -503,6 +526,17 @@ def sync_to_mopidy(mopidy: MopidyClient, seen_songs: Set[str], not_found_songs: 
         artists = current.get('artists', [])
         artist = artists[0].get('name', 'Unknown') if artists else 'Unknown'
         print(f"🎵 Now playing: {artist} - {name}")
+        current_song = f"{artist} - {name}"
+        if current_song != last_icy_song:
+            if is_initial:
+                # Don't push yet — shout2send hasn't connected to Icecast yet.
+                # Leave last_icy_song=None so the first regular cycle always pushes.
+                pass
+            else:
+                push_icecast_metadata(artist, name)
+                last_icy_song = current_song
+    else:
+        current_song = last_icy_song
 
     # Auto-resume playback if stopped/paused
     state = mopidy.get_state()
@@ -514,8 +548,7 @@ def sync_to_mopidy(mopidy: MopidyClient, seen_songs: Set[str], not_found_songs: 
     # Check stream health: if Mopidy is playing but Icecast has no stream, skip the broken track
     # Skip this check on initial sync - GStreamer needs time to connect to Icecast after first play()
     elif state == 'playing' and tracklist_length > 0 and not is_initial:
-        icecast_host = os.getenv('ICECAST_HOST', 'icecast')
-        if not check_icecast_stream(icecast_host):
+        if not check_icecast_stream(ICECAST_HOST):
             broken_track = mopidy.get_current_track()
             broken_name = broken_track.get('name', 'Unknown') if broken_track else 'Unknown'
             broken_artists = broken_track.get('artists', []) if broken_track else []
@@ -530,12 +563,13 @@ def sync_to_mopidy(mopidy: MopidyClient, seen_songs: Set[str], not_found_songs: 
 
             # Verify stream recovered
             time.sleep(4)
-            if check_icecast_stream(icecast_host):
+            if check_icecast_stream(ICECAST_HOST):
                 print("✅ Stream recovered")
             else:
                 print("⚠️  Stream still broken after skip, will retry next cycle")
 
     print("✓ Sync complete\n")
+    return last_icy_song
 
 
 def main():
@@ -568,10 +602,11 @@ def main():
     seen_songs: Set[str] = set()
     not_found_songs: Set[str] = set()
     logger = sheets_logger_module.create_logger()
+    last_icy_song: Optional[str] = None
 
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Initial sync...")
     try:
-        sync_to_mopidy(mopidy, seen_songs, not_found_songs, logger, is_initial=True, prune=False)
+        last_icy_song = sync_to_mopidy(mopidy, seen_songs, not_found_songs, logger, is_initial=True, prune=False, last_icy_song=last_icy_song)
     except Exception as e:
         print(f"Error in initial sync: {e}")
         import traceback
@@ -594,7 +629,7 @@ def main():
             else:
                 print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Checking for new songs...")
 
-            sync_to_mopidy(mopidy, seen_songs, not_found_songs, logger, is_initial=False, prune=should_prune)
+            last_icy_song = sync_to_mopidy(mopidy, seen_songs, not_found_songs, logger, is_initial=False, prune=should_prune, last_icy_song=last_icy_song)
 
         except KeyboardInterrupt:
             print("\nStopping...")
