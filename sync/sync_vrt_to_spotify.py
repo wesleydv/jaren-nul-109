@@ -156,8 +156,13 @@ class SpotifyClient:
         )
         try:
             with urlopen(req, timeout=10) as resp:
-                raw = resp.read()
-                return json.loads(raw) if raw else None
+                raw = resp.read().strip()
+                if not raw:
+                    return None
+                try:
+                    return json.loads(raw)
+                except json.JSONDecodeError:
+                    return None  # 204 or non-JSON response
         except HTTPError as e:
             if e.code == 401 and retry:
                 self._refresh_access_token()
@@ -344,9 +349,10 @@ def find_best_match(vrt_artist: str, vrt_title: str,
 def search_and_add_song(spotify: SpotifyClient, song: Dict,
                         not_found_songs: Set[str], logger=None) -> Optional[str]:
     """Search Spotify for a song, return its URI or None."""
+    first_artist = re.split(r'[&,]|feat\.?|ft\.?', song["artist"])[0].strip()
     for query in [
         f"{song['artist']} {song['title']}",
-        f"{re.split(r'[&,]|feat\.?|ft\.?', song['artist'])[0].strip()} {song['title']}",
+        f"{first_artist} {song['title']}",
         song["title"],
     ]:
         results = spotify.search(query)
