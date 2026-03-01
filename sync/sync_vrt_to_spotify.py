@@ -8,6 +8,7 @@ No audio streaming infrastructure needed — the device plays natively via Spoti
 import json
 import os
 import re
+import socket
 import threading
 import time
 from datetime import datetime
@@ -18,6 +19,8 @@ from urllib.parse import urlencode, urlparse, parse_qs
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 import base64
+
+from zeroconf import ServiceBrowser, ServiceStateChange, Zeroconf
 
 import sheets_logger as sheets_logger_module
 
@@ -374,12 +377,83 @@ def search_and_add_song(spotify: SpotifyClient, song: Dict,
 
 
 # ---------------------------------------------------------------------------
-# Device discovery
+# Device discovery (Spotify API + mDNS fallback)
 # ---------------------------------------------------------------------------
+
+def _scan_mdns(timeout: float = 4.0) -> List[Dict]:
+    """Scan LAN for _spotify-connect._tcp services via mDNS."""
+    found: List[Dict] = []
+    lock = threading.Lock()
+
+    def on_change(zc: Zeroconf, service_type: str, name: str,
+                  state_change: ServiceStateChange):
+        if state_change is not ServiceStateChange.Added:
+            return
+        info = zc.get_service_info(service_type, name)
+        if not info or not info.addresses:
+            return
+        props = {
+            (k.decode() if isinstance(k, bytes) else k):
+            (v.decode() if isinstance(v, bytes) else v)
+            for k, v in (info.properties or {}).items()
+        }
+        with lock:
+            found.append({
+                "address": socket.inet_ntoa(info.addresses[0]),
+                "port":    info.port,
+                "path":    props.get("CPath", "/spotify-info"),
+            })
+
+    zc = Zeroconf()
+    browser = ServiceBrowser(zc, "_spotify-connect._tcp.local.", handlers=[on_change])
+    time.sleep(timeout)
+    browser.cancel()
+    zc.close()
+    return found
+
+
+def discover_and_wake_device(spotify: SpotifyClient, target_name: str) -> Optional[str]:
+    """
+    Scan LAN via mDNS for Spotify Connect devices.
+    For each device found, fetch its deviceID via the Zeroconf getInfo endpoint,
+    then attempt transfer_playback to wake its Spotify session.
+    Returns the deviceID of the matching device if found, else None.
+    """
+    print("📡 Scanning LAN for Spotify Connect devices via mDNS...")
+    candidates = _scan_mdns()
+    if not candidates:
+        print("  No Spotify Connect devices found on LAN")
+        return None
+
+    for d in candidates:
+        url = f"http://{d['address']}:{d['port']}{d['path']}?action=getInfo"
+        try:
+            with urlopen(Request(url), timeout=5) as resp:
+                info = json.loads(resp.read())
+            remote_name = info.get("remoteName", "")
+            device_id   = info.get("deviceID", "")
+            print(f"  mDNS: '{remote_name}' at {d['address']}:{d['port']} "
+                  f"(id: {device_id[:8] if device_id else '?'}…)")
+            if remote_name.lower() == target_name.lower() and device_id:
+                print("  Device is on the LAN — attempting to wake Spotify Connect session...")
+                spotify.transfer_playback(device_id, play=False)
+                return device_id
+        except Exception as e:
+            print(f"  getInfo failed for {d['address']}: {e}")
+
+    print(f"  '{target_name}' not found among LAN devices")
+    return None
+
 
 def find_device(spotify: SpotifyClient, name: str,
                 retries: int = 10, delay: int = 5) -> Optional[str]:
-    """Find a Spotify Connect device by name, with retries."""
+    """
+    Find a Spotify Connect device by name.
+    Checks the Spotify Web API first; on the 3rd failed attempt uses mDNS to
+    locate the device on the LAN and nudges its Spotify Connect session via
+    transfer_playback. Returns device_id or None after all retries.
+    """
+    mdns_attempted = False
     for attempt in range(1, retries + 1):
         devices = spotify.get_devices()
         for device in devices:
@@ -387,10 +461,23 @@ def find_device(spotify: SpotifyClient, name: str,
                 print(f"✓ Found device: {device['name']} (id: {device['id'][:8]}…)")
                 state.device_name = device["name"]
                 return device["id"]
+
+        available = [d.get("name") for d in devices]
         print(f"  Device '{name}' not found (attempt {attempt}/{retries}), "
-              f"available: {[d.get('name') for d in devices]}")
+              f"available: {available}")
+
+        # After the 3rd regular attempt, try mDNS wake-up once
+        if attempt == 3 and not mdns_attempted:
+            mdns_attempted = True
+            mdns_id = discover_and_wake_device(spotify, name)
+            if mdns_id:
+                # Give device a moment to register with Spotify backend
+                time.sleep(5)
+                continue  # retry API check immediately
+
         if attempt < retries:
             time.sleep(delay)
+
     return None
 
 
@@ -446,30 +533,55 @@ def sync_new_songs(spotify: SpotifyClient, device_id: str,
         print("  No new songs")
 
 
-def check_and_resume(spotify: SpotifyClient, device_id: str):
-    """Resume playback if the device has stopped."""
+def check_and_resume(spotify: SpotifyClient, device_id: str) -> str:
+    """
+    Resume playback if the device has stopped.
+    If the device has disappeared from Spotify, tries mDNS re-discovery.
+    Returns the (possibly refreshed) device_id.
+    """
+    # First make sure device still appears in the API
+    devices = spotify.get_devices()
+    device_still_known = any(d.get("id") == device_id for d in devices)
+    if not device_still_known:
+        print("⚠️  Device disappeared from Spotify — attempting mDNS re-discovery...")
+        new_id = discover_and_wake_device(spotify, SPOTIFY_DEVICE_NAME)
+        if new_id:
+            time.sleep(5)
+            refreshed = find_device(spotify, SPOTIFY_DEVICE_NAME, retries=6, delay=5)
+            if refreshed:
+                print(f"✓ Device recovered (id: {refreshed[:8]}…)")
+                state.device_id = refreshed
+                device_id = refreshed
+            else:
+                print("  Device still not visible in Spotify API after mDNS wake-up")
+                return device_id
+        else:
+            print("  Device not found on LAN either — will retry next cycle")
+            return device_id
+
     ps = spotify.get_playback_state()
     if ps is None:
         # 204 — nothing playing at all; transfer and resume
         print("⚠️  Nothing playing, resuming...")
         spotify.transfer_playback(device_id, play=True)
-        return
+        return device_id
 
     current_device = ps.get("device", {})
     if current_device.get("id") != device_id:
         print(f"⚠️  Playback moved to another device ({current_device.get('name')}), transferring back...")
         spotify.transfer_playback(device_id, play=True)
-        return
+        return device_id
 
     if not ps.get("is_playing", False):
         print("⚠️  Playback paused/stopped, resuming...")
         spotify.resume_playback(device_id)
-        return
+        return device_id
 
     track = ps.get("item", {})
     if track:
         artists = ", ".join(a["name"] for a in track.get("artists", []))
         print(f"🎵 Now playing: {artists} - {track.get('name')}")
+    return device_id
 
 
 # ---------------------------------------------------------------------------
@@ -578,10 +690,11 @@ def main():
 
     print(f"🔍 Looking for Spotify Connect device '{SPOTIFY_DEVICE_NAME}'...")
     device_id = find_device(spotify, SPOTIFY_DEVICE_NAME)
-    if not device_id:
-        print(f"❌ Device '{SPOTIFY_DEVICE_NAME}' not found after retries. "
-              f"Make sure it is powered on and logged into Spotify.")
-        raise SystemExit(1)
+    while not device_id:
+        print(f"⚠️  '{SPOTIFY_DEVICE_NAME}' not reachable via Spotify. "
+              f"Retrying in 30s… (tip: open Spotify app and connect to the speaker once)")
+        time.sleep(30)
+        device_id = find_device(spotify, SPOTIFY_DEVICE_NAME, retries=3, delay=5)
     state.device_id = device_id
 
     logger = sheets_logger_module.create_logger()
@@ -602,7 +715,7 @@ def main():
             time.sleep(CHECK_INTERVAL)
             print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Syncing...")
             sync_new_songs(spotify, device_id, seen_songs, not_found_songs, logger)
-            check_and_resume(spotify, device_id)
+            device_id = check_and_resume(spotify, device_id)
             print("✓ Sync complete")
         except KeyboardInterrupt:
             print("\nStopping...")

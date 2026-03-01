@@ -3,7 +3,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install dependencies
-RUN pip install --no-cache-dir gspread
+RUN pip install --no-cache-dir gspread zeroconf
 
 COPY sync_vrt_to_spotify.py .
 COPY sheets_logger.py .
