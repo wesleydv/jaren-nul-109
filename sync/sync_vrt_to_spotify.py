@@ -385,11 +385,11 @@ def _scan_mdns(timeout: float = 4.0) -> List[Dict]:
     found: List[Dict] = []
     lock = threading.Lock()
 
-    def on_change(zc: Zeroconf, service_type: str, name: str,
+    def on_change(zeroconf: Zeroconf, service_type: str, name: str,
                   state_change: ServiceStateChange):
         if state_change is not ServiceStateChange.Added:
             return
-        info = zc.get_service_info(service_type, name)
+        info = zeroconf.get_service_info(service_type, name)
         if not info or not info.addresses:
             return
         props = {
