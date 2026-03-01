@@ -25,15 +25,6 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push Mopidy image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./mopidy
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: wesleydv938/jaren-nul-mopidy:latest
-          no-cache: true
-
       - name: Build and push Sync image
         uses: docker/build-push-action@v6
         with:
