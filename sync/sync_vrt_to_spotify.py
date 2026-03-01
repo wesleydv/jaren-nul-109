@@ -47,7 +47,7 @@ SPOTIFY_CLIENT_ID     = os.getenv("SPOTIFY_CLIENT_ID", "")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET", "")
 SPOTIFY_REFRESH_TOKEN = os.getenv("SPOTIFY_REFRESH_TOKEN", "")
 SPOTIFY_DEVICE_NAME   = os.getenv("SPOTIFY_DEVICE_NAME", "Keuken")
-CONTROL_PORT          = int(os.getenv("CONTROL_PORT", "8080"))
+CONTROL_PORT          = int(os.getenv("CONTROL_PORT", "8877"))
 CHECK_INTERVAL        = 120   # seconds between VRT syncs
 STREAM_NAME           = "De Jaren Nul - 109"
 
@@ -89,6 +89,8 @@ class AppState:
     spotify: Optional["SpotifyClient"] = None
     device_id: Optional[str] = None
     device_name: Optional[str] = None
+    initial_uris: List[str] = []
+    playback_started: bool = False
 
 state = AppState()
 
@@ -559,6 +561,10 @@ def check_and_resume(spotify: SpotifyClient, device_id: str) -> str:
             print("  Device not found on LAN either — will retry next cycle")
             return device_id
 
+    if not state.playback_started:
+        print("  Playback not yet started — waiting for /play")
+        return device_id
+
     ps = spotify.get_playback_state()
     if ps is None:
         # 204 — nothing playing at all; transfer and resume
@@ -611,7 +617,12 @@ class ControlHandler(BaseHTTPRequestHandler):
             if ps and ps.get("is_playing"):
                 self._respond(200, {"status": "already_playing"})
                 return
-            state.spotify.transfer_playback(state.device_id, play=True)
+            if not state.playback_started and state.initial_uris:
+                # First play: start the full queue
+                state.spotify.start_playback(state.device_id, state.initial_uris)
+                state.playback_started = True
+            else:
+                state.spotify.transfer_playback(state.device_id, play=True)
             self._respond(200, {"status": "playing"})
         except Exception as e:
             self._respond(500, {"error": str(e)})
@@ -704,9 +715,8 @@ def main():
     print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Initial sync...")
     uris = build_initial_uris(spotify, seen_songs, not_found_songs, logger)
     if uris:
-        print(f"\n▶️  Starting playback with {len(uris)} tracks on '{SPOTIFY_DEVICE_NAME}'...")
-        spotify.start_playback(device_id, uris)
-        print("✓ Playback started")
+        state.initial_uris = uris
+        print(f"✓ {len(uris)} tracks queued — call /play to start playback")
     else:
         print("⚠️  No tracks found for initial queue")
 
