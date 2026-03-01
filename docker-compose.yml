@@ -1,6 +1,6 @@
 services:
   sync-service:
-    image: wesleydv938/jaren-nul-sync:latest
+    build: ./sync
     container_name: jaren-nul-sync
     restart: unless-stopped
     ports:
