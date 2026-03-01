@@ -40,7 +40,7 @@ load_dotenv()
 CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID", "")
 CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET", "")
 REDIRECT_URI = "http://127.0.0.1:8888/callback"
-SCOPES = "user-modify-playback-state user-read-playback-state user-read-currently-playing"
+SCOPES = "streaming user-modify-playback-state user-read-playback-state user-read-currently-playing"
 
 if not CLIENT_ID or not CLIENT_SECRET:
     print("❌ SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET must be set in .env or environment.")
