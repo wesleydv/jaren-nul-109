@@ -5,24 +5,26 @@ Syncs VRT "De Jaren Nul" playlist to a Spotify Connect device via the Spotify We
 No audio streaming infrastructure needed — the device plays natively via Spotify Connect.
 """
 
+import base64
 import json
 import os
 import re
 import socket
 import threading
 import time
+import traceback
+from dataclasses import dataclass, field
 from datetime import datetime
 from difflib import SequenceMatcher
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Dict, List, Optional, Set
-from urllib.parse import urlencode, urlparse, parse_qs
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
-import base64
 
 from zeroconf import ServiceBrowser, ServiceStateChange, Zeroconf
 
-import sheets_logger as sheets_logger_module
+from sheets_logger import create_logger as create_sheets_logger
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +52,12 @@ SPOTIFY_DEVICE_NAME   = os.getenv("SPOTIFY_DEVICE_NAME", "Keuken")
 CONTROL_PORT          = int(os.getenv("CONTROL_PORT", "8877"))
 CHECK_INTERVAL        = 120   # seconds between VRT syncs
 STREAM_NAME           = "De Jaren Nul - 109"
+
+# Song matching weights / thresholds
+MATCH_ARTIST_WEIGHT = 0.7
+MATCH_TITLE_WEIGHT  = 0.3
+MATCH_THRESHOLD     = 0.7
+MATCH_MAX_RESULTS   = 10
 
 # VRT GraphQL
 GRAPHQL_URL  = "https://www.vrt.be/vrtnu-api/graphql/public/v1"
@@ -85,11 +93,12 @@ query component($componentId: ID!, $lazyItemCount: Int = 100) {
 # Shared state (read by HTTP control server thread)
 # ---------------------------------------------------------------------------
 
+@dataclass
 class AppState:
     spotify: Optional["SpotifyClient"] = None
     device_id: Optional[str] = None
     device_name: Optional[str] = None
-    initial_uris: List[str] = []
+    initial_uris: List[str] = field(default_factory=list)
 
 state = AppState()
 
@@ -300,11 +309,6 @@ def calculate_artist_similarity(artist1: str, artist2: str) -> float:
 
 def find_best_match(vrt_artist: str, vrt_title: str,
                     search_results: List[Dict]) -> Optional[Dict]:
-    ARTIST_WEIGHT = 0.7
-    TITLE_WEIGHT  = 0.3
-    THRESHOLD     = 0.7
-    MAX_RESULTS   = 10
-
     best_score = 0.0
     best_track = None
 
@@ -314,7 +318,7 @@ def find_best_match(vrt_artist: str, vrt_title: str,
     )
     vrt_artist_parts = [p.strip() for p in vrt_artist_parts if p.strip()]
 
-    for track in search_results[:MAX_RESULTS]:
+    for track in search_results[:MATCH_MAX_RESULTS]:
         track_artists = track.get("artists", [])
         if not track_artists:
             continue
@@ -326,7 +330,7 @@ def find_best_match(vrt_artist: str, vrt_title: str,
             matches = 0
             for vrt_part in vrt_artist_parts:
                 for artist_obj in track_artists:
-                    if calculate_artist_similarity(vrt_part, artist_obj.get("name", "")) >= 0.7:
+                    if calculate_artist_similarity(vrt_part, artist_obj.get("name", "")) >= MATCH_THRESHOLD:
                         matches += 1
                         break
             multi_artist_sim = matches / len(vrt_artist_parts) if vrt_artist_parts else 0
@@ -338,12 +342,12 @@ def find_best_match(vrt_artist: str, vrt_title: str,
             )
 
         title_sim = calculate_artist_similarity(vrt_title, track.get("name", ""))
-        score = (max_artist_sim * ARTIST_WEIGHT) + (title_sim * TITLE_WEIGHT)
+        score = (max_artist_sim * MATCH_ARTIST_WEIGHT) + (title_sim * MATCH_TITLE_WEIGHT)
         if score > best_score:
             best_score = score
             best_track = track
 
-    return best_track if best_score >= THRESHOLD else None
+    return best_track if best_score >= MATCH_THRESHOLD else None
 
 
 def search_and_add_song(spotify: SpotifyClient, song: Dict,
@@ -649,7 +653,7 @@ def main():
         device_id = find_device(spotify, SPOTIFY_DEVICE_NAME, retries=3, delay=5)
     state.device_id = device_id
 
-    logger = sheets_logger_module.create_logger()
+    logger = create_sheets_logger()
     seen_songs: Set[str] = set()
     not_found_songs: Set[str] = set()
 
@@ -672,7 +676,6 @@ def main():
             break
         except Exception as e:
             print(f"Error in sync loop: {e}")
-            import traceback
             traceback.print_exc()
 
 
