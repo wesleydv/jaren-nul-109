@@ -1,118 +1,75 @@
 # De Jaren Nul - 109
 
-Auto-sync VRT "De Jaren Nul" playlist to an Icecast stream via Spotify.
+Syncs the VRT "De Jaren Nul" playlist to a Spotify Connect speaker.
 
-## Quick Start
+The service runs as a Docker container. It periodically fetches the VRT playlist, searches for each track on Spotify, and adds new songs to the speaker's queue. Playback is fully manual — the service never auto-starts or auto-resumes.
 
-### 1. Get Spotify Credentials
+## Setup
 
-**You need Spotify Premium**
+### 1. Create a Spotify app
 
-1. Go to https://mopidy.com/ext/spotify/
-2. Click the "Authenticate Mopidy with Spotify" button
-3. Follow the instructions in the popup
-4. After closing the popup, the page will show your credentials
-5. Copy the `client_id` and `client_secret` values
+Go to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and create an app. Set the redirect URI to `http://127.0.0.1:8888/callback`.
 
-### 2. Configure Environment
+Copy the **Client ID** and **Client Secret**.
 
-Copy `.env.example` to `.env`:
+### 2. Get a refresh token
 
 ```bash
 cp .env.example .env
+# Fill in SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET
+python sync/get_token.py
 ```
 
-Edit `.env` and paste your credentials:
-```ini
-SPOTIFY_CLIENT_ID=your_client_id_from_mopidy
-SPOTIFY_CLIENT_SECRET=your_client_secret_from_mopidy
-```
+Authorize in the browser. Copy the printed `SPOTIFY_REFRESH_TOKEN=...` line into `.env`.
 
-### 3. Start
+### 3. Configure the speaker name
+
+Set `SPOTIFY_DEVICE_NAME` in `.env` to the name of the speaker as it appears in the Spotify app (e.g. `Keuken`).
+
+The speaker must be visible in your Spotify account at least once before starting the container — open the Spotify app and connect to it manually to register it.
+
+### 4. Deploy
 
 ```bash
 docker-compose up -d
 ```
 
-### 4. Listen
+## Controlling playback
 
-Stream URL: `http://YOUR_SERVER_IP:8000/stream`
+The container exposes an HTTP control API on port 8877:
 
-Mopidy Web UI: `http://YOUR_SERVER_IP:6680`
+| Endpoint | Description |
+|---|---|
+| `GET /play` | Start playback (first call loads the queue; subsequent calls resume) |
+| `GET /stop` | Pause playback |
+| `GET /status` | Returns current playback state as JSON |
 
-## Configuration
+```bash
+curl http://localhost:8877/play
+curl http://localhost:8877/stop
+curl http://localhost:8877/status
+```
 
-All configuration is in `.env`:
+## Google Sheets logging (optional)
 
-| Variable | Required | Description |
-|---|---|---|
-| `SPOTIFY_CLIENT_ID` | Yes | Your Spotify client ID |
-| `SPOTIFY_CLIENT_SECRET` | Yes | Your Spotify client secret |
-| `GOOGLE_SHEETS_ID` | No | Google Spreadsheet ID to log added songs |
-| `GOOGLE_SHEETS_CREDENTIALS_PATH` | No | Path to Google service account JSON on the host |
+When configured, every track added to the queue is logged to a Google Sheet with columns: **Artist · Title · Times Added · Spotify URI**.
 
-Everything else is hardcoded for simplicity:
-- Stream checks every 2 minutes
-- Playlist cleanup every 24 hours
-- Stream name: "De Jaren Nul - 109"
-
-## Google Sheets Logging (optional)
-
-When configured, every song added to the playlist is logged to a Google Sheet with columns:
-**Spotify Artist | Spotify Title | Times Added | URI**
-
-The Spotify URI is used as the unique key — when the same track is added again, the Times Added counter increments rather than creating a duplicate row.
-
-### Setup
-
-**1. Create a Google Cloud service account**
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project (or use an existing one)
-3. Enable the **Google Sheets API**
-4. Go to **IAM & Admin → Service Accounts** and create a service account
-5. Create a JSON key for the service account and download it
-
-**2. Share your spreadsheet**
-
-1. Create a new Google Sheet
-2. Copy the spreadsheet ID from the URL: `https://docs.google.com/spreadsheets/d/**SPREADSHEET_ID**/edit`
-3. Share the sheet with the service account's email address (Editor access)
-
-**3. Configure `.env`**
+1. Create a Google Cloud service account and enable the **Google Sheets API**
+2. Download the JSON key file
+3. Share your spreadsheet with the service account's email (Editor access)
+4. Add to `.env`:
 
 ```ini
 GOOGLE_SHEETS_ID=your_spreadsheet_id_here
 GOOGLE_SHEETS_CREDENTIALS_PATH=/path/to/service-account.json
 ```
 
-The credentials file is mounted read-only into the container at runtime — it does not get baked into the Docker image.
+The credentials file is mounted read-only into the container — it is not baked into the image.
 
-## Usage
+## Useful commands
 
-### View logs
 ```bash
-docker-compose logs -f
+docker-compose logs -f        # follow logs
+docker-compose restart        # restart the container
+docker-compose down           # stop
 ```
-
-### Restart
-```bash
-docker-compose restart
-```
-
-### Stop
-```bash
-docker-compose down
-```
-
-## Architecture
-
-- **Icecast** - Streaming server
-- **Mopidy** - Music server with Spotify backend
-- **Sync Service** - Python script that syncs VRT playlist to Mopidy
-
-The sync service:
-- Fetches the latest playlist from VRT every 2 minutes
-- Searches for songs on Spotify
-- Adds new songs to the queue
-- Removes old songs once per day
