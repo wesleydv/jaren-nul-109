@@ -90,7 +90,6 @@ class AppState:
     device_id: Optional[str] = None
     device_name: Optional[str] = None
     initial_uris: List[str] = []
-    playback_started: bool = False
 
 state = AppState()
 
@@ -218,10 +217,6 @@ class SpotifyClient:
         self._put("/me/player/play",
                   params={"device_id": device_id},
                   body={"uris": uris})
-
-    def resume_playback(self, device_id: str):
-        """Resume paused playback."""
-        self._put("/me/player/play", params={"device_id": device_id})
 
     def pause_playback(self, device_id: str):
         """Pause playback."""
@@ -535,59 +530,6 @@ def sync_new_songs(spotify: SpotifyClient, device_id: str,
         print("  No new songs")
 
 
-def check_and_resume(spotify: SpotifyClient, device_id: str) -> str:
-    """
-    Resume playback if the device has stopped.
-    If the device has disappeared from Spotify, tries mDNS re-discovery.
-    Returns the (possibly refreshed) device_id.
-    """
-    # First make sure device still appears in the API
-    devices = spotify.get_devices()
-    device_still_known = any(d.get("id") == device_id for d in devices)
-    if not device_still_known:
-        print("⚠️  Device disappeared from Spotify — attempting mDNS re-discovery...")
-        new_id = discover_and_wake_device(spotify, SPOTIFY_DEVICE_NAME)
-        if new_id:
-            time.sleep(5)
-            refreshed = find_device(spotify, SPOTIFY_DEVICE_NAME, retries=6, delay=5)
-            if refreshed:
-                print(f"✓ Device recovered (id: {refreshed[:8]}…)")
-                state.device_id = refreshed
-                device_id = refreshed
-            else:
-                print("  Device still not visible in Spotify API after mDNS wake-up")
-                return device_id
-        else:
-            print("  Device not found on LAN either — will retry next cycle")
-            return device_id
-
-    if not state.playback_started:
-        print("  Playback not yet started — waiting for /play")
-        return device_id
-
-    ps = spotify.get_playback_state()
-    if ps is None:
-        # 204 — nothing playing at all; transfer and resume
-        print("⚠️  Nothing playing, resuming...")
-        spotify.transfer_playback(device_id, play=True)
-        return device_id
-
-    current_device = ps.get("device", {})
-    if current_device.get("id") != device_id:
-        print(f"⚠️  Playback moved to another device ({current_device.get('name')}), transferring back...")
-        spotify.transfer_playback(device_id, play=True)
-        return device_id
-
-    if not ps.get("is_playing", False):
-        print("⚠️  Playback paused/stopped, resuming...")
-        spotify.resume_playback(device_id)
-        return device_id
-
-    track = ps.get("item", {})
-    if track:
-        artists = ", ".join(a["name"] for a in track.get("artists", []))
-        print(f"🎵 Now playing: {artists} - {track.get('name')}")
-    return device_id
 
 
 # ---------------------------------------------------------------------------
@@ -617,10 +559,9 @@ class ControlHandler(BaseHTTPRequestHandler):
             if ps and ps.get("is_playing"):
                 self._respond(200, {"status": "already_playing"})
                 return
-            if not state.playback_started and state.initial_uris:
-                # First play: start the full queue
+            if state.initial_uris:
                 state.spotify.start_playback(state.device_id, state.initial_uris)
-                state.playback_started = True
+                state.initial_uris = []   # consumed — subsequent /play calls use transfer
             else:
                 state.spotify.transfer_playback(state.device_id, play=True)
             self._respond(200, {"status": "playing"})
@@ -725,7 +666,6 @@ def main():
             time.sleep(CHECK_INTERVAL)
             print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Syncing...")
             sync_new_songs(spotify, device_id, seen_songs, not_found_songs, logger)
-            device_id = check_and_resume(spotify, device_id)
             print("✓ Sync complete")
         except KeyboardInterrupt:
             print("\nStopping...")
